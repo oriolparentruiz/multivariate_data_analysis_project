@@ -1,0 +1,519 @@
+---
+title: "PCA and MDS"
+author: "Lucas Viner"
+date: "2025-05-27"
+output: pdf_document
+---
+## PREPROCESS
+```{r}
+library(tidyverse);
+library(corrplot);
+library(factoextra);
+library(FactoMineR);
+library(gridExtra);
+library(plotly);
+library(MASS);
+library(smacof);
+library(cluster);
+library("aplpack")
+library(viridis)
+library(RColorBrewer)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+```
+
+```{r}
+spotify_data = read.csv("high_popularity_spotify_data.csv", stringsAsFactors = FALSE)
+dim(spotify_data)
+```
+
+
+```{r}
+names(spotify_data)
+```
+
+```{r}
+colSums(is.na(spotify_data))
+```
+
+```{r}
+sp_clean <- spotify_data[!is.na(spotify_data$track_album_name), ]
+cols_to_remove <- c("track_id", "track_href", "uri", "analysis_url", "id", 
+                    "playlist_id", "type", "track_album_id", "key", "mode","time_signature")
+
+sp_clean <- sp_clean[ , !(names(sp_clean) %in% cols_to_remove)]
+sp_clean$track_popularity <- as.numeric(sp_clean$track_popularity)
+sp_clean$duration_ms <- as.numeric(sp_clean$duration_ms)
+names(sp_clean)
+```
+
+```{r}
+sapply(sp_clean, class)
+```
+
+```{r}
+
+top_5_genres <- sp_clean %>%
+  count(playlist_genre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_genre)
+
+
+filtered_data <- sp_clean %>%
+  filter(playlist_genre %in% top_5_genres)
+
+top_5_subgenres <- filtered_data %>%
+  count(playlist_subgenre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_subgenre)
+
+sp_filtered <- filtered_data %>%
+  filter(playlist_subgenre %in% top_5_subgenres)
+dim(sp_filtered)
+```
+
+
+```{r}
+spotify_data_numeric <- sp_filtered[, sapply(sp_filtered, is.numeric)]
+faces(spotify_data_numeric[1:9,],face.type=0, main = "Chernoff Faces - Tipo 0")
+faces(spotify_data_numeric[1:9,],face.type=1, main = "Chernoff Faces - Tipo 1")
+par(mfrow = c(1, 1))
+```
+
+## PCA
+
+```{r}
+sp_filtered$playlist_genre <- factor(sp_filtered$playlist_genre)
+sp_filtered$playlist_subgenre <- factor(sp_filtered$playlist_subgenre)
+# Lista de columnas numéricas
+numeric_vars <- c("energy", "tempo", "danceability", "loudness", "liveness", 
+                  "valence", "speechiness", "instrumentalness",
+                  "duration_ms", "acousticness", 
+                  "track_popularity")
+categorical_indices <- which(names(sp_filtered) %in% c("playlist_genre", "playlist_subgenre", "track_artist", "playlist_name", "track_album_name", "track_name", "track_album_release_date"))
+summary(sp_filtered)
+```
+
+```{r}
+spotify_pca <- PCA(sp_filtered,
+                   quali.sup = categorical_indices,
+                   graph = FALSE)
+summary(spotify_pca)
+```
+
+```{r}
+spotify_pca$eig
+```
+ 
+```{r}
+
+var_explicada <- spotify_pca$eig[,2]  
+
+df <- data.frame(Componente = seq_along(var_explicada), Varianza = var_explicada)
+
+ggplot(df, aes(x = Componente, y = Varianza)) +
+  geom_point(color="blue", size=3) +
+  geom_line(color="blue") +
+  labs(title = "Scree Plot", 
+       x = "Principal Component",
+       y = "Proportion of Variance Explained") +
+  theme_minimal()
+```
+
+
+```{r}
+calculate_KMO <- function(x) {
+  x <- subset(x, complete.cases(x))       
+  r <- cor(x)                             
+  r2 <- r^2                               
+  i <- solve(r)                           
+  d <- diag(i)                            
+  p2 <- (-i / sqrt(outer(d, d)))^2        
+  diag(r2) <- diag(p2) <- 0               
+  KMO <- sum(r2) / (sum(r2) + sum(p2))    
+  MSA <- colSums(r2) / (colSums(r2) + colSums(p2))  
+  return(list(KMO = KMO, MSA = MSA))
+}
+
+kmo_result <- calculate_KMO(sp_filtered_numeric)
+
+cat("KMO global:", round(kmo_result$KMO, 3), "\n")
+
+print(round(kmo_result$MSA, 3))
+```
+
+```{r}
+spotify_pca$var$cor
+```
+
+```{r}
+contrib_pc1 <- fviz_contrib(spotify_pca, choice = "var", axes = 1, top = 10,
+                            title = "Contribution of Variables to PC1")
+
+contrib_pc2 <- fviz_contrib(spotify_pca, choice = "var", axes = 2, top = 10,
+                            title = "Contribution of Variables to PC2")
+
+contrib_pc3 <- fviz_contrib(spotify_pca, choice = "var", axes = 3, top = 10,
+                            title = "Contribution of Variables to PC3")
+
+contrib_pc4 <- fviz_contrib(spotify_pca, choice = "var", axes = 4, top = 10,
+                            title = "Contribution of Variables to PC4")
+
+grid.arrange(contrib_pc1, contrib_pc2, contrib_pc3, contrib_pc4, ncol = 2)
+```
+
+
+```{r}
+p1 <- plot.PCA(spotify_pca, 
+               choix = "var", 
+               axes = c(1, 2), 
+               title = "Correlation Circle: Dim 1 vs Dim 2")
+
+p2 <- plot.PCA(spotify_pca, 
+               choix = "var", 
+               axes = c(3, 4), 
+               title = "Correlation Circle: Dim 3 vs Dim 4")
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r}
+unique_track_names <- make.unique(as.character(sp_filtered$track_name))
+
+rownames(sp_filtered) <- unique_track_names
+
+rownames(spotify_pca$ind$coord) <- unique_track_names
+
+pp1 <- plot.PCA(spotify_pca, choix = "ind", axes = c(1, 2))  # Dim 1 vs Dim 2
+pp2 <- plot.PCA(spotify_pca, choix = "ind", axes = c(3, 4))  # Dim 3 vs Dim 4
+grid.arrange(pp1, pp2, ncol = 2)
+
+```
+```{r}
+p1 <- plot.PCA(spotify_pca, choix = "ind", axes = c(1, 2), invisible = "quali")
+p2 <- plot.PCA(spotify_pca, choix = "ind", axes = c(3, 4), invisible = "quali")
+
+grid.arrange(p1, p2, ncol = 2, top = "Individual Factor Map: PCA Representation")
+
+```
+
+```{r}
+cat("Exemple extrem dim1:")
+sp_filtered[121, ]
+sp_filtered[86, ]
+
+cat("Exemple extrem dim2:")
+sp_filtered[165, ]
+sp_filtered[31, ]
+
+cat("Exemple extrem dim3:")
+sp_filtered[226, ]
+sp_filtered[117, ]
+
+cat("Exemple extrem dim4:")
+sp_filtered[123, ]
+sp_filtered[96, ]
+```
+
+
+```{r}
+p1 <- fviz_pca_ind(spotify_pca,
+                    axes = c(1, 2),
+                    label = "none",
+                    geom = "point",
+                    pointshape = 19,
+                    pointsize = 1,
+                    habillage = sp_filtered$playlist_genre,
+                    addEllipses = FALSE,  
+                    repel = TRUE,
+                    title = "Songs in the Space of Dimensions 1 and 2")
+
+p2 <- fviz_pca_ind(spotify_pca,
+                    axes = c(3, 4),
+                    label = "none",
+                    geom = "point",
+                    pointshape = 19,
+                    pointsize = 1,
+                    habillage = sp_filtered$playlist_genre,
+                    addEllipses = FALSE,  
+                    repel = TRUE,
+                    title = "Projection of Songs in Dimensions 3 and 4")
+
+grid.arrange(p1, p2, ncol = 2, top = "PCA Representation of Songs")
+
+```
+
+```{r}
+ind_coords <- get_pca_ind(spotify_pca)$coord[, 1:4]
+
+pca_with_genre <- data.frame(
+  Dim1 = ind_coords[, 1],
+  Dim2 = ind_coords[, 2], 
+  Dim3 = ind_coords[, 3],
+  Dim4 = ind_coords[, 4],
+  playlist_genre = sp_filtered$playlist_genre,
+  stringsAsFactors = FALSE
+)
+
+str(pca_with_genre)
+
+genre_stats <- pca_with_genre %>%
+  group_by(playlist_genre) %>%
+  summarise(
+    Dim1_mean = mean(Dim1, na.rm = TRUE),
+    Dim1_sd   = sd(Dim1, na.rm = TRUE),
+    Dim2_mean = mean(Dim2, na.rm = TRUE),
+    Dim2_sd   = sd(Dim2, na.rm = TRUE),
+    Dim3_mean = mean(Dim3, na.rm = TRUE),
+    Dim3_sd   = sd(Dim3, na.rm = TRUE),
+    Dim4_mean = mean(Dim4, na.rm = TRUE),
+    Dim4_sd   = sd(Dim4, na.rm = TRUE),
+    n         = n(),
+    .groups   = 'drop'
+  )
+
+print("Estadístiques per gènere:")
+print(genre_stats)
+```
+
+```{r}
+if(require(plotly, quietly = TRUE)) {
+  
+  pca_3d_data <- data.frame(
+    Dim1 = ind_coords[, 1],
+    Dim2 = ind_coords[, 2],
+    Dim3 = ind_coords[, 3],
+    Genre = sp_filtered$playlist_genre,
+    Artist = sp_filtered$track_artist,
+    Song = sp_filtered$track_name
+  )
+  
+  set.seed(123)
+  sample_idx <- sample(nrow(pca_3d_data), min(1000, nrow(pca_3d_data)))
+  pca_3d_sample <- pca_3d_data[sample_idx, ]
+  
+  p_3d <- plot_ly(pca_3d_sample, 
+                  x = ~Dim1, y = ~Dim2, z = ~Dim3,
+                  color = ~Genre,
+                  text = ~paste("Artista:", Artist, "<br>Canción:", Song),
+                  type = "scatter3d",
+                  mode = "markers",
+                  marker = list(size = 3)) %>%
+    layout(title = "PCA 3D - Canciones por Género",
+           scene = list(
+             xaxis = list(title = "Dim 1 (Energía vs Acústica)"),
+             yaxis = list(title = "Dim 2 (Bailabilidad)"),
+             zaxis = list(title = "Dim 3 (Popularidad vs Experimental)")
+           ))
+  
+  print(p_3d)
+}
+```
+
+
+## MDS 
+```{r}
+sp_filtered_numeric <- sp_filtered[sapply(sp_filtered, is.numeric)]
+
+cor_matrix <- cor(sp_filtered_numeric)
+corrplot(cor_matrix, method = "color", type = "upper", 
+         order = "hclust", tl.col = "black", tl.srt = 45,
+         title = "Matriz de Correlaciones - Variables Numéricas")
+```
+
+Decidirem eliminar un seguit de variables i escalarem les que ens quedem
+```{r}
+vars_to_remove <- c("energy", "liveness", "loudness", "acousticness", 
+                   "instrumentalness", "duration_ms")
+mds_data <- (sp_filtered_numeric[, !names(sp_filtered_numeric) %in% vars_to_remove])
+mds_data_scaled <- scale(mds_data)
+mds_data_final <- unique(mds_data_scaled)
+mds_data_final <- as.data.frame(mds_data_final)
+cat("\nDimensiones después del preprocesamiento:")
+cat("\n- Observaciones originales:", nrow(sp_filtered_numeric))
+cat("\n- Observaciones después de eliminar duplicados:", nrow(mds_data_final))
+cat("\n- Variables finales:", ncol(mds_data_final))
+cat("\n- Variables finales:", paste(names(mds_data_final), collapse = ", "))
+```
+
+```{r}
+dist_euclidean <- dist(mds_data_final, method = "euclidean")
+
+mds_data_gower = sp_filtered[, c("playlist_genre", names(sp_filtered)[sapply(sp_filtered, is.numeric)])]
+mds_data_gower$playlist_genre <- as.factor(mds_data_gower$playlist_genre)
+gower_dist <- daisy(mds_data_gower, metric = "gower")
+```
+
+```{r}
+mds_metric <- cmdscale(dist_euclidean, eig = TRUE)
+
+eigenvalues <- mds_metric$eig
+positive_eig <- eigenvalues[eigenvalues > 0]
+gof_2d <- sum(positive_eig[1:2]) / sum(positive_eig)
+```
+
+```{r}
+coords_mds <- mds_metric$points[, 1:2]
+colnames(coords_mds) <- c("MDS1", "MDS2")
+
+track_names <- as.character(sp_filtered$track_name)
+
+plot(coords_mds[,1], coords_mds[,2], 
+     xlab = "Coordinate 1", 
+     ylab = "Coordinate 2", 
+     main = "Metric MDS - Euclidean (Songs)", 
+     type = "n")
+
+points(coords_mds[,1], coords_mds[,2], pch = 19, col = "black", cex = 0.5)
+
+text(coords_mds[,1], coords_mds[,2], labels = track_names, cex = 0.6, pos = 3)
+
+```
+
+```{r}
+colors <- as.factor(sp_filtered$playlist_genre)
+palette <- rainbow(length(unique(colors)))
+plot(coords_mds, type = "n", main = "MDS by genre")
+text(coords_mds, labels = track_names, col = palette[colors], cex = 0.6)
+
+legend("topright", legend = levels(colors), col = palette, pch = 16, cex = 0.5)
+```
+
+```{r}
+top_200_idx <- order(sp_filtered$track_popularity, decreasing = TRUE)[1:200]
+
+x_top200 <- coords_mds[top_200_idx]
+
+track_names_top200 <- make.unique(as.character(sp_filtered$track_name[top_200_idx]))
+colors_top200 <- as.factor(sp_filtered$playlist_genre[top_200_idx])
+palette_top200 <- rainbow(length(levels(colors_top200)))
+
+plot(x_top200, type = "n", main = "Top 200 cançons més populars")
+text(x_top200, labels = track_names_top200,
+     col = palette_top200[as.numeric(colors_top200)], cex = 0.7)
+legend("topright", legend = levels(colors), col = palette, pch = 16, cex = 0.5)
+
+```
+
+```{r}
+original_vars <- list(tempo = sp_filtered$tempo, 
+                      danceability = sp_filtered$danceability, 
+                      valence = sp_filtered$valence, 
+                      speechiness = sp_filtered$speechiness, 
+                      track_popularity = sp_filtered$track_popularity)
+
+par(mfrow = c(2, 3))
+
+for (var in names(original_vars)) {
+  var_values <- original_vars[[var]]
+  colors_var <- colorRampPalette(c("blue", "white", "red"))(100)
+  color_indices <- cut(var_values, breaks = 100, labels = FALSE, include.lowest = TRUE)
+  
+  plot(coords_df$MDS1, coords_df$MDS2,
+       col = colors_var[color_indices], pch = 16, cex = 1.2,
+       xlab = "MDS Dimension 1", ylab = "MDS Dimension 2",
+       main = paste("MDS Colored by", var))
+  
+  legend("topright", 
+         legend = c("Low", "High"),
+         col = c("blue", "red"), pch = 16, cex = 0.5)
+}
+
+par(mfrow = c(1, 1))
+```
+
+```{r}
+mds_gower_metric <- cmdscale(gower_dist, k = 2, eig = TRUE)
+eigv <- mds_gower_metric$eig
+
+dims <- 1:10
+
+gof1 <- cumsum(eigv[dims]) / sum(abs(eigv)) * 100
+gof2 <- cumsum(eigv[dims]) / sum(eigv[eigv > 0]) * 100
+
+data.frame(
+  Dimensions = dims,
+  GOF1 = gof1,
+  GOF2 = gof2
+)
+```
+
+
+```{r}
+coords_gower <- mds_gower_metric$points[, 1:2]
+colnames(coords_gower) <- c("MDS1", "MDS2")
+
+plot(coords_gower[,1], coords_gower[,2],
+     xlab = "Coordenada 1",
+     ylab = "Coordenada 2",
+     main = "MDS amb distància Gower",
+     col = "black",
+     pch = 16, cex = 0.5)
+text(coords_gower[,1], coords_gower[,2], labels = track_names, cex = 0.6)
+```
+
+
+```{r}
+colors <- as.factor(sp_filtered$playlist_genre)
+palette <- rainbow(length(unique(colors)))
+plot(coords_gower, type = "n", main = "MDS with gower distance by genre")
+text(coords_gower, labels = track_names, col = palette[colors], cex = 0.6)
+
+legend("topright", legend = levels(colors), col = palette, pch = 16, cex = 0.5)
+```
+
+```{r}
+original_vars <- list(tempo = sp_filtered$tempo, 
+                      danceability = sp_filtered$danceability, 
+                      valence = sp_filtered$valence, 
+                      speechiness = sp_filtered$speechiness, 
+                      track_popularity = sp_filtered$track_popularity)
+
+par(mfrow = c(2, 3))
+
+for (var in names(original_vars)) {
+  var_values <- original_vars[[var]]
+  colors_var <- colorRampPalette(c("blue", "white", "red"))(100)
+  color_indices <- cut(var_values, breaks = 100, labels = FALSE, include.lowest = TRUE)
+  
+  plot(coords_df$MDS1, coords_df$MDS2,
+       col = colors_var[color_indices], pch = 16, cex = 1.2,
+       xlab = "MDS Dimension 1", ylab = "MDS Dimension 2",
+       main = paste("MDS Colored by", var))
+  
+  legend("topright", 
+         legend = c("Low", "High"),
+         col = c("blue", "red"), pch = 16, cex = 0.5)
+}
+
+par(mfrow = c(1, 1))
+```
+
+```{r}
+set.seed(123)
+sp_nmds <- isoMDS(dist_euclidean)
+cat("Stress del MDS no-mètric:", round(sp_nmds$stress, 4))
+```
+
+```{r}
+nmds_coords <- sp_nmds$points
+colnames(nmds_coords) <- c("NMDS1", "NMDS2")
+
+plot(nmds_coords[, 1], nmds_coords[, 2],
+     xlab = "NMDS Dimensió 1", ylab = "NMDS Dimensió 2",
+     main = paste("MDS No Métric (Stress =", round(sp_nmds$stress, 3), ")"),
+     type = "n")
+text(nmds_coords[, 1], nmds_coords[, 2], 
+     labels = make.unique(track_names), 
+     cex = 0.6, col = "darkgreen")
+```
+
+```{r}
+spotify_shepard <- Shepard(dist_euclidean, sp_nmds$points)
+
+plot(spotify_shepard, pch = ".", main = "Shepard plot - NMDS")
+lines(spotify_shepard$x, spotify_shepard$yf, type = "S")
+```

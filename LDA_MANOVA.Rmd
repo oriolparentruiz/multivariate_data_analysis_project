@@ -1,0 +1,217 @@
+---
+title: "PCA and MDS"
+author: "Lucas Viner"
+date: "2025-05-27"
+output: pdf_document
+---
+## PREPROCESS
+
+```{r}
+spotify_data = read.csv("high_popularity_spotify_data.csv", stringsAsFactors = FALSE)
+head(spotify_data)
+```
+```{r}
+dim(spotify_data)
+```
+```{r}
+names(spotify_data)
+```
+
+```{r}
+colSums(is.na(spotify_data))
+```
+Veiem que hi ha un NA en el track_album_name. El treurem i eliminarem aquelles columnes que considerem que no són importants en el nostre context per realitzar un multivariate analysis.
+```{r}
+spotify_data_clean <- spotify_data[!is.na(spotify_data$track_album_name), ]
+cols_to_remove <- c("track_id", "track_href", "uri", "analysis_url", "id", 
+                    "playlist_id", "type", "track_album_id", "key", "mode","time_signature")
+
+spotify_data_clean <- spotify_data_clean[ , !(names(spotify_data_clean) %in% cols_to_remove)]
+# Convertir variables enteras a numéricas si es necesario
+spotify_data_clean$track_popularity <- as.numeric(spotify_data_clean$track_popularity)
+spotify_data_clean$duration_ms <- as.numeric(spotify_data_clean$duration_ms)
+names(spotify_data_clean)
+```
+```{r}
+sapply(spotify_data_clean, class)
+```
+```{r}
+library(aplpack)
+numeric_data <- spotify_data_clean[ , sapply(spotify_data_clean, is.numeric)]
+faces()
+faces(numeric_data[1:9,],face.type=0)
+faces(numeric_data[1:9,],face.type=1)
+```
+```{r}
+library(dplyr)
+
+# Get the top 5 most frequent genres
+top_5_genres <- spotify_data_clean %>%
+  count(playlist_genre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_genre)
+
+# Create a new dataset with only the top 5 genres
+filtered_data <- spotify_data_clean %>%
+  filter(playlist_genre %in% top_5_genres)
+# Step 2: Get the top 5 most frequent subgenres within filtered_data
+top_5_subgenres <- filtered_data %>%
+  count(playlist_subgenre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_subgenre)
+
+# Step 3: Filter again to keep only rows with those top 5 subgenres
+sp_filtered <- filtered_data %>%
+  filter(playlist_subgenre %in% top_5_subgenres)
+```
+
+## LDA
+
+```{r}
+# Select numerical columns only
+numeric_cols <- sapply(sp_filtered, is.numeric)
+sp_numeric <- sp_filtered[, numeric_cols]
+
+## Checking histogram, qqplots and shapiro Willk's test results
+for (col_name in colnames(sp_numeric)) {
+  cat(col_name)
+  print(shapiro.test(sp_numeric[[col_name]]))
+  print(ks.test(sp_numeric[[col_name]], "pnorm", mean=mean(sp_numeric[[col_name]]), sd=sd(sp_numeric[[col_name]])))
+  qqnorm(sp_numeric[[col_name]], main = col_name)
+  hist(sp_numeric[[col_name]], main = col_name)
+}
+```
+```{r}
+x11(width = 12, height = 8)  # You can adjust width/height as needed
+
+# Set up grid layout for plots
+n_cols <- 3  # Number of columns in the panel
+n_rows <- ceiling(length(colnames(sp_numeric)) / n_cols)
+
+par(mfrow = c(n_rows, n_cols), mar = c(5, 4, 4, 2) + 0.1)
+
+# Create boxplots for each numeric variable
+for (col_name in colnames(sp_numeric)) {
+  boxplot(sp_numeric[[col_name]] ~ sp_filtered$playlist_genre,
+          main = paste("Boxplot de", col_name, "por playlist_genre"),
+          xlab = "playlist_genre",
+          ylab = col_name,
+          las = 2,              # Rotate labels for better fit
+          col = "lightblue",
+          border = "gray40")
+}
+
+# Reset layout (optional)
+par(mfrow = c(1, 1))
+locator(1)
+```
+```{r}
+# Eliminar variables negatives o amb zeros
+sp_input <- sp_numeric[, !(names(sp_numeric) %in% c("instrumentalness", "loudness"))] 
+
+sp_boxcox <- sp_input
+
+# Box Cox transformation
+for (var in names(sp_input)) {
+  y <- sp_input[[var]]
+  bc <- boxcox(lm(y ~ 1), lambda = seq(-2, 2, 0.1))
+  lambda_opt <- bc$x[which.max(bc$y)]
+
+  # Apply transformation using the best lambda
+  if (lambda_opt == 0) {
+    sp_boxcox[[var]] <- log(y)
+  } else {
+    sp_boxcox[[var]] <- (y^lambda_opt - 1) / lambda_opt
+  }
+} 
+
+# Standarize
+sp_boxcox_scaled <- as.data.frame(scale(sp_boxcox))
+```
+```{r}
+## Checking histogram, qqplots and shapiro Willk's test results
+for (col_name in colnames(sp_boxcox_scaled)) {
+  cat(col_name)
+  print(shapiro.test(sp_boxcox_scaled[[col_name]]))
+  print(ks.test(sp_boxcox_scaled[[col_name]], "pnorm", mean=mean(sp_boxcox_scaled[[col_name]]), sd=sd(sp_boxcox_scaled[[col_name]])))
+  qqnorm(sp_boxcox_scaled[[col_name]], main = col_name)
+  hist(sp_boxcox_scaled[[col_name]], main = col_name)
+}
+```
+```{r}
+sp_fit  <- cbind(sp_boxcox_scaled, playlist_genre = as.factor(sp_filtered$playlist_genre))
+
+summary(sp_fit)
+str(sp_fit)
+```
+```{r}
+qda.fit <- qda(playlist_genre ~ ., data = sp_fit)
+qda.fit
+```
+```{r}
+qda.class <- predict (qda.fit)
+
+tabqda<-table(qda.class$class,sp_fit$playlist_genre)
+tabqda
+sum(diag(tabqda))/sum(tabqda)
+```
+```{r}
+library(klaR)
+
+pdf("qda_partimat.pdf", width = 14, height = 14)
+partimat(playlist_genre ~ ., data = sp_fit, method = "qda")
+dev.off()
+```
+
+```{r}
+### Q statistic
+# Q=(n-ñk)^2/n(k-1)
+## compared with chi^2 value of (1,0.05)
+ny <- sum(diag(tabqda))
+n <- nrow(sp_fit)
+k <- 5
+
+Qsp <- ((n - ny * k)^2) / (n * (k - 1))
+cat("Q statistic:", Qsp, "\n")
+
+q_critical <- qchisq(0.95, df = k - 1)
+cat("Critical value (chi-squared, 0.95, df =", k - 1, "):", q_critical, "\n")
+```
+```{r}
+set.seed(2)
+# Stepwise Classification
+sp_step<-stepclass(sp_boxcox_scaled,sp_fit$playlist_genre,method="qda",direction="backward", criterion="CR", start.vars = c("danceability", "speechiness", "acousticness","duration_ms","track_popularity","valence"))
+sp_step
+
+summary(sp_step)
+sp_step$process
+sp_step$model
+sp_step$result.pm
+
+```
+```{r}
+library(e1071)
+
+sp_naive.fit<-naiveBayes(playlist_genre ~ ., data = sp_fit)
+sp_naive.fit
+```
+```{r}
+sp_naive.class <- predict (sp_naive.fit , sp_fit)
+table(sp_naive.class, sp_fit$playlist_genre)
+
+mean(sp_naive.class==sp_fit$playlist_genre)
+```
+```{r}
+sp_naive.preds<-predict(sp_naive.fit, sp_fit, type="raw")
+sp_naive.preds[1:20,]
+```
+## MANOVA
+
+```{r}
+dependent_vars <- paste(colnames(sp_numeric), collapse = ", ")
+formula_str <- paste("cbind(", dependent_vars, ") ~ playlist_genre")
+
+
+sp_manova <- manova(as.formula(formula_str), data = sp_filtered)
+summary.aov(sp_manova)
+```

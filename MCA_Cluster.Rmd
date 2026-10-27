@@ -1,0 +1,480 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+---
+title: "PCA and MDS"
+author: "Lucas Viner"
+date: "2025-05-27"
+output: pdf_document
+---
+## PREPROCESS
+```{r}
+library(dplyr)
+library(FactoMineR)
+library(factoextra)
+library(gridExtra)
+library(dendextend)
+```
+
+
+```{r}
+spotify_data = read.csv("high_popularity_spotify_data.csv", stringsAsFactors = TRUE)
+```
+
+```{r}
+dim(spotify_data)
+```
+```{r}
+names(spotify_data)
+```
+
+```{r}
+colSums(is.na(spotify_data))
+```
+```{r}
+spotify_data_clean <- spotify_data[!is.na(spotify_data$track_album_name), ]
+cols_to_remove <- c("track_id", "track_href", "uri", "analysis_url", "id", 
+                    "playlist_id", "type", "track_album_id", "key", "mode","time_signature")
+
+spotify_data_clean <- spotify_data_clean[ , !(names(spotify_data_clean) %in% cols_to_remove)]
+
+spotify_data_clean$track_popularity <- as.numeric(spotify_data_clean$track_popularity)
+spotify_data_clean$duration_ms <- as.numeric(spotify_data_clean$duration_ms)
+names(spotify_data_clean)
+```
+```{r}
+sapply(spotify_data_clean, class)
+```
+```{r}
+summary(spotify_data_clean)
+```
+
+```{r}
+top_5_genres <- spotify_data_clean %>%
+  count(playlist_genre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_genre)
+
+filtered_data <- spotify_data_clean %>%
+  filter(playlist_genre %in% top_5_genres)
+
+top_5_subgenres <- filtered_data %>%
+  count(playlist_subgenre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_subgenre)
+
+sp_filtered <- filtered_data %>%
+  filter(playlist_subgenre %in% top_5_subgenres)
+```
+
+
+```{r}
+sp_filtered <- sp_filtered[!duplicated(sp_filtered), ]
+
+sp_filtered$playlist_genre <- as.factor(sp_filtered$playlist_genre)
+```
+
+```{r}
+View(sp_filtered)
+```
+
+```{r}
+num_vars <- names(sp_filtered)[sapply(sp_filtered, is.numeric)]
+num_vars <- setdiff(num_vars, c("tempo", "duration_ms", "loudness"))
+print(num_vars)
+
+```
+
+
+```{r}
+categorize_variable <- function(x) {
+  q <- quantile(x, probs = c(0, 1/3, 2/3, 1), na.rm = TRUE)
+  if (length(unique(q)) < 4) {
+    cut(x,
+        breaks = quantile(x, probs = c(0, 0.5, 1), na.rm = TRUE),
+        labels = c("Bajo", "Alto"),
+        include.lowest = TRUE)
+  } else {
+    cut(x,
+        breaks = q,
+        labels = c("Bajo", "Medio", "Alto"),
+        include.lowest = TRUE)
+  }
+}
+
+for (var in num_vars) {
+  sp_filtered[[paste0(var, "_cat")]] <- categorize_variable(sp_filtered[[var]])
+}
+```
+
+
+```{r}
+View(sp_filtered)
+```
+
+```{r}
+cat_vars <- c("energy_cat", "danceability_cat", "liveness_cat", "valence_cat", "speechiness_cat", "track_popularity_cat", "instrumentalness_cat", "acousticness_cat", "playlist_genre")
+
+mca_data <- sp_filtered[, cat_vars]
+
+mca_data[] <- lapply(mca_data, as.factor)
+```
+
+```{r}
+res.mca <- MCA(mca_data, graph = FALSE)
+
+fviz_mca_biplot(res.mca, 
+                repel = TRUE, 
+                ggtheme = theme_minimal())
+```
+
+```{r}
+vaps = res.mca$eig
+```
+
+```{r}
+mean_vaps <- mean(vaps[, 1])  
+print(mean_vaps)
+```
+```{r}
+barplot(res.mca$eig[,2],main="Eigenvalues", names.arg=1:nrow(res.mca$eig))
+```
+
+```{r}
+cat_vars <- c("energy_cat", "danceability_cat", "valence_cat",
+              "speechiness_cat", "instrumentalness_cat", "acousticness_cat")
+
+plot_list <- list()
+
+for (i in seq_along(cat_vars)) {
+  plot_list[[i]] <- fviz_mca_ind(
+    res.mca,
+    habillage = cat_vars[i],
+    label = "none",
+    addEllipses = TRUE,
+    repel = TRUE,
+    title = paste("MCA -", cat_vars[i])
+  )
+}
+
+grid.arrange(grobs = plot_list, ncol = 3, nrow = 2)
+
+```
+
+```{r}
+# Plot 1: Active categories only (without individuals)
+plot1 <- fviz_mca_var(res.mca, 
+                      choice = "mca.cor",
+                      title = "Graph of the active categories",
+                      repel = TRUE,
+                      ggtheme = theme_minimal())
+
+# Plot 2: Cloud of variables 
+plot2 <- fviz_mca_var(res.mca,
+                      title = "Cloud of variables",
+                      repel = TRUE,
+                      ggtheme = theme_minimal())
+
+# Plot 3: MCA classified by playlist_genre
+plot3 <- fviz_mca_ind(res.mca,
+                      habillage = "playlist_genre",
+                      title = "MCA classified by playlist_genre",
+                      repel = TRUE,
+                      ggtheme = theme_minimal(),
+                      legend.title = "Playlist Genre")
+
+combined_plot <- grid.arrange(plot1, plot2, plot3, 
+                             ncol = 2, nrow = 2,
+                             top = "Multiple Correspondence Analysis - Combined View")
+
+combined_plot
+```
+
+
+```{r}
+dim_combinations <- list(c(1,2))
+
+for (var in cat_vars) {
+  for (dims in dim_combinations) {
+    print(
+      plot.MCA(res.mca,
+               choix = "ind",
+               label = "none",
+               invisible = "var",
+               habillage = var,
+               axes = dims,
+               title = paste("MCA -", var, "- Dimensiones", paste(dims, collapse = "-")))
+    )
+  }
+}
+```
+
+```{r}
+plot(res.mca,invisible=c("ind"),title="Graph of the active categories")
+```
+
+```{r}
+plot(res.mca,choix="var",title="Cloud of variables")
+```
+
+```{r}
+fviz_mca_var(res.mca, 
+             repel = TRUE, 
+             ggtheme = theme_minimal(),
+             title = "MCA - Categorías (Modalidades)")
+
+```
+
+
+ANALISIS CLUSTER
+
+```{r}
+spotify_data_cluster = read.csv("high_popularity_spotify_data.csv")
+spotify_data_clean_cluster <- spotify_data_cluster[!is.na(spotify_data_cluster$track_album_name), ]
+cols_to_remove <- c("track_id", "track_href", "uri", "analysis_url", "id", 
+                    "playlist_id", "type", "track_album_id", "key", "mode","time_signature")
+
+spotify_data_clean_cluster <- spotify_data_clean_cluster[ , !(names(spotify_data_clean_cluster) %in% cols_to_remove)]
+
+spotify_data_clean_cluster$track_popularity <- as.numeric(spotify_data_clean_cluster$track_popularity)
+spotify_data_clean_cluster$duration_ms <- as.numeric(spotify_data_clean_cluster$duration_ms)
+```
+
+```{r}
+top_5_genres_cluster <- spotify_data_clean_cluster %>%
+  count(playlist_genre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_genre)
+
+filtered_data_cluster <- spotify_data_clean_cluster %>%
+  filter(playlist_genre %in% top_5_genres_cluster)
+
+top_5_subgenres_cluster <- filtered_data_cluster %>%
+  count(playlist_subgenre, sort = TRUE) %>%
+  slice(1:5) %>%
+  pull(playlist_subgenre)
+
+sp_filtered_cluster <- filtered_data_cluster %>%
+  filter(playlist_subgenre %in% top_5_subgenres_cluster)
+```
+
+```{r}
+View(sp_filtered_cluster)
+```
+
+
+```{r}
+sp_filtered_cluster <- sp_filtered_cluster[!duplicated(sp_filtered_cluster$track_name), ]
+
+rownames(sp_filtered_cluster) <- sp_filtered_cluster$track_name
+
+sp_numeric <- sp_filtered_cluster[sapply(sp_filtered_cluster, is.numeric)]
+spoty_cluster = scale(sp_numeric)
+d <- dist(spoty_cluster)
+```
+
+```{r}
+spoty_cluster_df <- as.data.frame(spoty_cluster)
+
+```
+
+```{r}
+class(spoty_cluster_df)
+```
+
+
+```{r}
+fit_single <- hclust(d, method = "single")
+plot(fit_single, main = "Dendrogram of Single Linkage")
+```
+
+```{r}
+fit_complete <- hclust(d, method = "complete")
+plot(fit_complete, main = "Dendrogram of Complete Linkage")
+```
+```{r}
+fit_average <- hclust(d, method = "average")
+plot(fit_average, main = "Dendrogram of Average Linkage")
+```
+```{r}
+fit_ward <- hclust(d, method = "ward.D2")
+plot(fit_ward, main = "Dendrogram of Ward Method")
+```
+
+```{r}
+fit_centroid <- hclust(d, method = "centroid")
+plot(fit_centroid, main = "Dendrogram of Centroid Method")
+
+```
+
+```{r}
+dend1 <- as.dendrogram(fit_ward)
+
+groups <- cutree(fit_ward, k = 3)
+
+group_colors <- c("blue", "red", "green")
+
+labels_colors(dend1) <- group_colors[groups[order.dendrogram(dend1)]]
+
+plot(dend1, main = "Dendrogram with Leaf Labels Colored by Cluster")
+```
+
+```{r}
+dend2 <- as.dendrogram(fit_ward)
+
+groups <- cutree(fit_ward, k = 4)
+
+group_colors <- c("blue", "red", "green", "orange")
+
+labels_colors(dend2) <- group_colors[groups[order.dendrogram(dend2)]]
+
+plot(dend2, main = "Dendrogram with Leaf Labels Colored by Cluster")
+```
+
+```{r}
+dend3 <- as.dendrogram(fit_ward)
+
+groups <- cutree(fit_ward, k = 5)
+
+group_colors <- c("blue", "red", "green", "orange", "pink")
+
+labels_colors(dend3) <- group_colors[groups[order.dendrogram(dend3)]]
+
+plot(dend3, main = "Dendrogram with Leaf Labels Colored by Cluster")
+```
+
+
+```{r}
+dend6 <- as.dendrogram(fit_ward)
+
+groups <- cutree(fit_ward, k = 6)
+
+group_colors <- c("blue", "red", "green", "orange", "pink", "lightblue")
+
+labels_colors(dend6) <- group_colors[groups[order.dendrogram(dend6)]]
+
+plot(dend6, main = "Dendrogram with Leaf Labels Colored by Cluster")
+```
+
+```{r}
+dend7 <- as.dendrogram(fit_ward)
+
+groups <- cutree(fit_ward, k = 7)
+
+group_colors <- c("blue", "red", "green", "orange", "pink", "lightblue", "lightgreen")
+
+labels_colors(dend7) <- group_colors[groups[order.dendrogram(dend7)]]
+
+plot(dend7, main = "Dendrogram with Leaf Labels Colored by Cluster")
+```
+
+```{r}
+dend8 <- as.dendrogram(fit_ward)
+
+groups <- cutree(fit_ward, k = 8)
+
+group_colors <- c("blue", "red", "green", "orange", "pink", "lightblue", "lightgreen", "black")
+
+labels_colors(dend8) <- group_colors[groups[order.dendrogram(dend8)]]
+
+plot(dend8, main = "Dendrogram with Leaf Labels Colored by Cluster")
+```
+
+```{r}
+set.seed(987)
+aux_f <- c()
+for (i in 2:9) {
+  k <- kmeans(spoty_cluster_df, centers = i, nstart = 25)
+  aux_f[i - 1] <- (k$betweenss * (nrow(spoty_cluster) - i)) / (k$tot.withinss * (i - 1))
+}
+plot(2:9, aux_f, type = "l", xlab = "Number of Clusters", ylab = "Pseudo-F", main = "Pseudo-F Index")
+```
+
+```{r}
+dend <- as.dendrogram(fit_ward)
+
+groups <- cutree(fit_ward, k = 4)
+
+group_colors <- c("blue", "red", "green", "orange")
+
+labels_colors(dend) <- group_colors[groups[order.dendrogram(dend)]]
+
+plot(dend, main = "Dendrogram with Leaf Labels Colored by Cluster")
+```
+
+```{r}
+groups <- cutree(fit_ward, k = 4)
+
+split(names(groups), groups)
+```
+
+```{r}
+length(groups)
+nrow(spoty_cluster_df)
+```
+
+```{r}
+View(spoty_cluster_df)
+```
+
+```{r}
+groups = as.vector(groups)
+spoty_cluster_df$cluster <- groups
+```
+
+```{r}
+class(spoty_cluster_df)
+```
+
+```{r}
+group_means <- spoty_cluster_df %>%
+  group_by(cluster) %>%
+  summarise(across(where(is.numeric), \(x) mean(x, na.rm = TRUE)))
+```
+
+```{r}
+View(group_means)
+```
+
+```{r}
+k4 <- kmeans(spoty_cluster_df, centers = 4,nstart = 25)
+```
+
+```{r}
+fviz_cluster(k4, data = spoty_cluster_df, main = "Clústers K=4")
+```
+```{r}
+spoty_cluster_2 = data.frame(spoty_cluster_df, k4$cluster)
+```
+
+```{r}
+group_means_kmeans <- aggregate(spoty_cluster_2, by = list(Cluster = k4$cluster), FUN = mean)
+```
+
+```{r}
+group_means_kmeans$k4.cluster = NULL
+View(group_means_kmeans)
+```
+
+```{r}
+res.pca <- PCA(spoty_cluster_df, ncp = 3, graph = FALSE)
+res.hcpc <- HCPC(res.pca, graph = FALSE)
+```
+
+```{r}
+fviz_dend(res.hcpc, rect = TRUE, rect_fill = TRUE)
+```
+
+```{r}
+fviz_cluster(res.hcpc, repel = TRUE, show.clust.cent = TRUE,main = "Factor map")
+```
+
+```{r}
+spory_final <- cbind(spoty_cluster_df, cluster = res.hcpc$data.clust$clust)
+
+group_means_PCA <- aggregate(. ~ cluster, data = as.data.frame(spory_final), FUN = mean)
+
+print(group_means_PCA, row.names = FALSE)
+```
