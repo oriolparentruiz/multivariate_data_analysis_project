@@ -2,9 +2,6 @@
 
 Exploration and interpretation of a Spotify dataset of high-popularity tracks using **dimensionality reduction, clustering and classification techniques** in R, with the aim of understanding the relationship between audio features and musical genres.
 
-> Project for *Data Analysis* (Multivariate Analysis) · Universitat Politècnica de Catalunya (UPC) · Bachelor's in Data Science and Engineering (GCED) · Academic year 2024–2025
-> Authors: **Oriol Parent**, **Nicolás Jiménez** and **Lucas Viner**
-
 ---
 
 ## 📌 Overview
